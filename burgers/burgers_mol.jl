@@ -44,18 +44,18 @@ ts = sol[t]
 U = sol[u(x, t)]
 
 # save solution data next to this script
-datafile = joinpath(@__DIR__, "burgers_data.jld2")
+datafile = joinpath(@__DIR__, "output", "burgers_mol_data.jld2")
 jldsave(datafile; xs, ts, U, ν)
 println("saved solution to ", datafile)
 
 # static snapshot plot
 idx = 1:20:length(ts)
 plot(xs, U[:, idx], xlabel = "x", ylabel = "u", label = permutedims(["t = $(ts[i])" for i in idx]))
-savefig(joinpath(@__DIR__, "burgers_sample_data.png"))
+savefig(joinpath(@__DIR__, "output", "burgers_mol_snapshots.png"))
 
 # animation
 anim = @animate for k in eachindex(ts)
     plot(xs, U[:, k], xlabel = "x", ylabel = "u", ylims = (-0.05, 1.05), legend = false,
          title = "Burgers, ν = $(ν),  t = $(round(ts[k], digits = 2))")
 end
-gif(anim, joinpath(@__DIR__, "burgers.gif"), fps = 30)
+gif(anim, joinpath(@__DIR__, "output", "burgers_mol.gif"), fps = 30)

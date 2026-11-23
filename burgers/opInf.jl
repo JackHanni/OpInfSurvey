@@ -1,7 +1,7 @@
 using LinearAlgebra, JLD2
 include("burgers_fd.jl")
 
-datafile = joinpath(@__DIR__, "burgers_data.jld2")
+datafile = joinpath(@__DIR__, "output", "burgers_data.jld2")
 @load datafile xs ts U ν
 SVD = svd(U)
 r = 15
@@ -41,4 +41,4 @@ anim = @animate for k in eachindex(ts)
          title = "Burgers, r = $r,  t = $(round(ts[k], digits = 2)),  ‖res‖∞ = $(round(res_inf[k], sigdigits = 3))")
     plot!(xs, U_rom[:, k], label = "OpInf ROM", linestyle = :dash)
 end
-gif(anim, joinpath(@__DIR__, "burgers_rom.gif"), fps = 30)
+gif(anim, joinpath(@__DIR__, "output", "burgers_rom.gif"), fps = 30)

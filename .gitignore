@@ -5,3 +5,9 @@ Manifest.toml
 .vscode/
 .DS_Store
 *~
+
+# Claude Code personal settings
+.claude/settings.local.json
+
+# large regenerable data from the Einstein side study
+einstein/output/*.jld2
