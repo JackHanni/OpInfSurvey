@@ -34,7 +34,7 @@ POD-Galerkin reduced model.
 
 **Main finding** (`analysis/README.md`): the regression is limited by the training data, not the
 solver. With one trajectory, the data matrix reaches $\kappa(D) \approx 10^{13}$ at $r = 6$, and OpInf's
-accuracy levels off. Training on four initial conditions lowers $\kappa(D)$ by $10^{3}$–$10^{11}$ and
+accuracy levels off. Training on four initial conditions lowers $\kappa(D)$ by $10^{3}$ – $10^{11}$ and
 the prediction error at $r = 15$ from $4\times10^{-2}$ to $10^{-5}$.
 
 ### Einstein's field equations: Gowdy T³ cosmologies
