@@ -345,6 +345,23 @@ footer {
 </table>
 </div>
 
+<h2>Results so far</h2>
+<p>A first pass at all five questions is done for Burgers’ with <span class="math">ν</span> = 0.02 and <span class="math">n</span> = 201, trained on <span class="math">t</span> ≤ 2 and tested on 2 &lt; <span class="math">t</span> ≤ 4. Code, figures and full tables are in <code>analysis/</code> in the repository. Track B’s Python implementation should reproduce these numbers independently.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Question</th><th>Finding</th></tr></thead>
+  <tbody>
+    <tr><td>1. Recovery</td><td>With data that satisfy the reduced equations exactly, OpInf recovers the Galerkin operators to ~10<sup>−14</sup> at <span class="math">r</span> = 2–3, degrading to 10<sup>−5</sup> by <span class="math">r</span> = 6. With projected FOM derivatives the operators differ from Galerkin by O(1), yet the ROMs still track the data at small <span class="math">r</span>.</td></tr>
+    <tr><td>2. Conditioning</td><td>κ(D) reaches 10<sup>13</sup> at <span class="math">r</span> = 6 and 10<sup>29</sup> at <span class="math">r</span> = 18, far beyond (σ<sub>1</sub>/σ<sub>r</sub>)². Column scaling helps only for <span class="math">r</span> ≲ 5. The cause: with one trajectory every column of D is a smooth function of <span class="math">t</span>, so the columns are nearly dependent.</td></tr>
+    <tr><td>3. Solvers</td><td>QR and SVD errors follow ε·κ(D). The normal equations lose about twice the digits, and Cholesky fails outright from <span class="math">r</span> = 6.</td></tr>
+    <tr><td>4. Regularization</td><td>At <span class="math">r</span> = 15 the stability-based λ does best (4×10<sup>−2</sup> prediction error), with the L-curve close behind. GCV fails: it picks the smallest λ on the grid and the ROM predicts badly.</td></tr>
+    <tr><td>5. Robustness</td><td>With one trajectory OpInf levels off at ~10<sup>−3</sup> training / 4×10<sup>−2</sup> prediction error for <span class="math">r</span> ≥ 6, while Galerkin keeps improving. Noise up to 10<sup>−4</sup> has no effect; at 10<sup>−3</sup> and above, prediction error rises to 0.1–0.2.</td></tr>
+    <tr><td>Extra: more trajectories</td><td>Training on four initial conditions instead of one cuts κ(D) by 10<sup>3</sup>–10<sup>11</sup> and lowers the prediction error at <span class="math">r</span> = 15 from 4×10<sup>−2</sup> to 10<sup>−5</sup>.</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>Main lesson so far:</strong> the bottleneck is how much information the training data carries, not the solver. A single trajectory leaves D numerically rank-deficient however it is solved or regularized. The next experiments should use several initial conditions, and separate λ values for the linear and quadratic blocks.</p>
+
 <h2>Beyond Burgers’</h2>
 <p>Once the Burgers’ study is done, we’ll reuse the same pipeline (snapshots → SVD → least squares → ROM) on harder equations. Each one changes the linear algebra in a different way: the polynomial degree of the model sets how fast <span class="math">D</span> grows with <span class="math">r</span>, and the physics sets how fast the singular values decay. They’re listed in the order we plan to do them, easiest first.</p>
 
@@ -364,9 +381,10 @@ footer {
 <span class="eq">D<sub>μ</sub> F<sup>μν</sup> = 0<span class="note">classical SU(2), on a lattice</span></span>
 <p>The equations of motion have both quadratic and cubic terms in the gauge field, so the model needs both operators. The new difficulty is gauge freedom: many different field configurations describe the same physical state, so snapshots must be gauge-fixed first, or POD spends its modes on gauge artifacts instead of physics. A spatially homogeneous reduction turns the problem into a small chaotic ODE system, which would be a useful warm-up.</p>
 
-<h3><span class="who b">If time permits</span> Einstein field equations (reduced)</h3>
-<span class="eq">G<sub>μν</sub> = 8π T<sub>μν</sub><span class="note">spherically symmetric, coupled to a massless scalar field</span></span>
-<p>Full 3+1 numerical relativity is far beyond a course project, so we’ll do the standard 1+1 reduction: a massless scalar field collapsing in spherical symmetry (Choptuik’s problem). We’ll stay in the subcritical regime, where the field disperses and no black hole forms. The metric functions satisfy ODEs in <span class="math">r</span> (the constraints) at every time step, and the scalar field evolves by a wave equation. <strong>NLA angle:</strong> the nonlinearity isn’t polynomial (metric functions appear in denominators), so OpInf’s polynomial form doesn’t fit directly. We’d need a lifting transformation: add auxiliary variables until the system becomes quadratic (Qian et al., 2020). This is the most demanding item on the list, so it comes last.</p>
+<h3><span class="who both">Exploratory study done</span> Einstein field equations (Gowdy T³)</h3>
+<span class="eq">G<sub>μν</sub> = 0<span class="note">vacuum, T³ Gowdy symmetry: two coupled 1+1 wave equations for P(τ, θ), Q(τ, θ)</span></span>
+<p>Instead of spherical scalar collapse, a side study used Gowdy T³ cosmologies (Berger &amp; Moncrief, 1993): genuinely inhomogeneous vacuum solutions that reduce exactly to wave equations on a circle, with exact solutions to check against. The coefficients depend on time, so the ROM includes a known input term, <span class="math">dx̂/dt = Âx̂ + u(t)N̂x̂ + Ĥ(x̂ ⊗ x̂)</span>.</p>
+<p><strong>Polarized case</strong> (linear, exact Bessel-function data): OpInf needs the time-dependent term to predict well. With one trajectory the operators are not identifiable (cond(D) ≈ 3×10<sup>17</sup>); with two they are recovered to 10<sup>−9</sup>–10<sup>−11</sup>. <strong>Unpolarized case</strong> (nonlinear, our own validated solver): the e<sup>2P</sup> term is not polynomial, so the variables are lifted (Qian et al., 2020) to make the system exactly quadratic. Both lifted and naive OpInf fit the training data, but the lifted model predicts about 2× better and matches intrusive Galerkin. Code and results are in <code>einstein/</code> in the repository. Its README starts with a crash course on modeling Einstein’s equations, written for readers who know numerical PDEs but not general relativity: what the equations say, why gauge freedom and constraints make them hard, how symmetry reduces them to 1+1 PDEs, and what the Gowdy variables mean.</p>
 
 <div class="table-wrap">
 <table>
@@ -377,7 +395,7 @@ footer {
     <tr><td>Navier–Stokes</td><td>Quadratic</td><td>135</td><td>Large state; cheap SVD</td></tr>
     <tr><td>NLS</td><td>Cubic</td><td>695</td><td>Conditioning; conserved quantities</td></tr>
     <tr><td>Yang–Mills</td><td>Quadratic + cubic</td><td>815</td><td>Gauge freedom</td></tr>
-    <tr><td>Einstein (1+1)</td><td>Quadratic after lifting</td><td>Grows with lifted variables</td><td>Non-polynomial terms; constraints</td></tr>
+    <tr><td>Einstein (Gowdy T³, done)</td><td>Quadratic after lifting, plus input term</td><td>Grows with lifted variables</td><td>Non-polynomial terms; time-dependent coefficients</td></tr>
   </tbody>
 </table>
 </div>
@@ -389,7 +407,8 @@ footer {
 <p><strong>The extra PDEs don’t all fit.</strong> The Burgers’ study comes first and is the core of the report. After that, KdV is the cheapest win since it reuses everything, then Navier–Stokes. The “if time permits” equations are optional; if we start one and it stalls, we’ll document how far we got.</p>
 
 <h2>Tools</h2>
-<p>Python with NumPy and SciPy. We’ll write the least-squares solves ourselves, since they are the numerical linear algebra content, and use the Willcox group’s open-source <a href="https://github.com/Willcox-Research-Group/rom-operator-inference-Python3"><code>opinf</code></a> package only to check our results.</p>
+<p>Two languages, one per track. <strong>Track A</strong> works in Julia (solver, snapshots, basis; code in <code>burgers/</code>). <strong>Track B</strong> works in Python with NumPy and SciPy, and can use the Willcox group’s open-source <a href="https://github.com/Willcox-Research-Group/rom-operator-inference-Python3"><code>opinf</code></a> package to check results. We write the least-squares solves ourselves in both, since they are the numerical linear algebra content.</p>
+<p>The tracks share data through files, not code. <code>burgers/output/burgers_data.jld2</code> is an HDF5 file that Python can read with <code>h5py</code>; arrays come out transposed, because Julia stores arrays column-major and NumPy row-major. Running the same Burgers’ case independently in both languages, and getting the same operators and errors, is a built-in cross-check worth reporting.</p>
 
 <h2>References</h2>
 <ol class="refs">

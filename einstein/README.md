@@ -5,6 +5,117 @@ solutions of the vacuum Einstein equations G_μν = 0 in the
 **T³ Gowdy** symmetry class. Part A uses exact solutions. Part B uses data from my own solver,
 checked against an exact nonlinear solution.
 
+## Crash course: modeling Einstein's equations
+
+This section is for readers who know numerical PDEs and linear algebra but not general relativity.
+It covers just enough to follow the rest of this README. Units are geometric (G = c = 1).
+
+### 1. What the equations say
+
+The unknown is the **metric** g_μν(x): a symmetric 4×4 matrix field (10 functions of space and time)
+that defines distances and times, ds² = g_μν dx^μ dx^ν. Einstein's equations are
+
+    G_μν = 8π T_μν,        G_μν = R_μν − ½ R g_μν
+
+- T_μν is the matter content (energy density, momentum, stress). In **vacuum** T_μν = 0, and
+  spacetime can still be curved and dynamic: gravitational waves are vacuum solutions.
+- G_μν (the Einstein tensor) is built from first and second derivatives of g_μν. The equations are
+  a **nonlinear second-order PDE system** for g. They are linear in the second derivatives
+  (quasilinear), but the coefficients depend on g and its inverse.
+- Analogy: in Burgers', u_t + u u_x = ν u_xx, the unknown field also sets the coefficients of its
+  own equation. Einstein's equations do the same, with the inverse metric g^μν playing the role
+  of u in u·u_x. The inverse metric is where the non-polynomial terms come from.
+
+### 2. Why it is hard numerically
+
+1. **Coordinate (gauge) freedom.** Any change of coordinates gives another valid g_μν for the same
+   physical spacetime. Four of the ten functions are pure coordinate choices, so the equations alone
+   don't determine a unique solution. You must pick a gauge, and a bad one can make a smooth
+   physical solution look singular on the grid.
+2. **Constraints and evolution.** Split spacetime into slices of constant time (the **3+1** or ADM
+   split):
+
+       ds² = −α² dt² + γ_ij (dx^i + β^i dt)(dx^j + β^j dt)
+
+   Here γ_ij is the metric within a slice, α (lapse) sets how far apart in proper time the slices
+   are, and β^i (shift) sets how spatial coordinates move between slices. Einstein's equations then
+   divide into:
+   - **evolution equations** (hyperbolic-like) for γ_ij and its time derivative, the extrinsic
+     curvature K_ij; and
+   - **constraint equations** (elliptic) that every slice must satisfy, for example the Hamiltonian
+     constraint R + K² − K_ij K^ij = 16πρ.
+
+   The exact evolution preserves the constraints, but discretization error does not. Constraint
+   violation can grow and wreck a simulation, so monitoring it is a standard accuracy check.
+3. **Well-posedness.** The original ADM evolution equations are only weakly hyperbolic and tend to
+   blow up numerically. Production codes use reformulations (BSSN, generalized harmonic) that are
+   strongly hyperbolic. This is part of why full 3D numerical relativity took decades.
+4. **Singularities.** Black holes and big-bang/big-crunch singularities are places where curvature
+   blows up. Codes must avoid them (excision, special gauges) or approach them carefully.
+
+### 3. Symmetry reductions: how a course project can touch this
+
+Imposing symmetries collapses the 3+1 problem to something solvable on a laptop:
+
+| Symmetry | Resulting problem | Example |
+|---|---|---|
+| Homogeneous and isotropic | ODEs in time | FLRW cosmology (Friedmann equations) |
+| Homogeneous, anisotropic | ODEs in time | Bianchi cosmologies (the spatially homogeneous Yang–Mills reduction is similar) |
+| Spherical | 1+1 PDEs in (t, r) | Scalar-field collapse (Choptuik 1993) |
+| Two commuting spatial symmetries on T³ | 1+1 PDEs in (t, θ), periodic | **Gowdy T³**, used here |
+
+1+1 PDEs are the sweet spot for OpInf: a genuine field on a grid, but small enough for dense SVDs.
+
+### 4. Gowdy T³ in particular
+
+Gowdy spacetimes are closed universes, spatially a 3-torus T³, that are unchanged when you move
+along two of the three torus directions (σ, δ). Everything depends only on time τ and the third
+angle θ. The metric (written out in "Equations" below) contains three functions:
+
+- **P(τ, θ) and Q(τ, θ):** the two polarizations of gravitational waves travelling around the θ
+  circle. These are the dynamical fields.
+- **λ(τ, θ):** a background factor that is *not* evolved independently. It follows from P and Q by
+  integrating the constraint equations. This is the 3+1 constraint/evolution split in miniature.
+
+Key features, and how they show up in the code:
+
+- **Time runs toward a singularity.** The areal time is t = e^{−τ}, and the universe has a big-bang
+  singularity at t → 0, i.e. τ → ∞. The equations contain factors e^{−2τ} on every spatial-
+  derivative term. As τ grows they switch off, and each θ evolves almost on its own. This is called
+  **AVTD** (asymptotically velocity term dominated) behaviour. In the OpInf model, that e^{−2τ} (or
+  1/t) factor is exactly the time-dependent input u(t).
+- **Polarized vs unpolarized.** With Q ≡ 0 the P equation is *linear* and has exact solutions in
+  Bessel functions (Part A). With Q ≠ 0 the equations couple through e^{2P}, which is non-polynomial
+  (Part B). Near the singularity, Berger & Moncrief reported narrow "spikes" forming in the
+  unpolarized case; such steep features are a known challenge for both solvers and POD.
+- **Constraints as checks.** On T³ the momentum constraint requires ∮(P_θ P_τ + e^{2P} Q_θ Q_τ) dθ = 0.
+  The solver monitors it; it holds to about 1e-14.
+- **Gauge is already fixed.** The Gowdy form of the metric fixes the coordinates (areal time), so
+  none of the gauge problems from Section 2 arise. This is a big part of why the model fits in a
+  few hundred lines of Julia.
+
+### 5. How a numerical model is built and trusted here
+
+1. **Discretize:** periodic θ grid, 4th-order centered finite differences in θ, RK4 in τ. This is
+   the same method-of-lines approach as `../burgers/burgers_fd.jl`.
+2. **Verify against an exact solution:** the error should fall at the scheme's order (4th) as the
+   grid is refined. The solver shows 4.00 at N = 512.
+3. **Self-convergence** when no exact solution exists: compare runs at N and 2N.
+4. **Monitor the constraints:** they must stay at rounding level or converge to zero with
+   resolution.
+5. **Only then** use the snapshots as OpInf training data.
+
+### 6. Further reading
+
+- S. Carroll, *Spacetime and Geometry* (Addison-Wesley, 2004): general relativity from scratch.
+- M. Alcubierre, *Introduction to 3+1 Numerical Relativity* (Oxford University Press, 2008).
+- T. Baumgarte & S. Shapiro, *Numerical Relativity: Solving Einstein's Equations on the Computer*
+  (Cambridge University Press, 2010).
+- E. Gourgoulhon, *3+1 Formalism in General Relativity* (Springer Lecture Notes in Physics 846,
+  2012); free version at arXiv:gr-qc/0703035.
+- B. Berger, *Numerical approaches to spacetime singularities*, Living Rev. Relativ. 5, 1 (2002),
+  which covers Gowdy models specifically (see Sources below).
+
 ## Why Gowdy T³ (and not SXS or Choptuik)
 
 OpInf/POD needs a *field* on a spatial grid that evolves in time. Gowdy T³ spacetimes fit this
