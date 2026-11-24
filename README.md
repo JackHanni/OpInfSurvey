@@ -48,7 +48,7 @@ $$
 h(t, \theta, \phi) = \sum_{\ell \ge 2} \sum_{|m| \le \ell} h_{\ell m}(t)\, {}_{-2}Y_{\ell m}(\theta, \phi),
 $$
 
-with 77 modes ($\ell = 2, \dots, 8$). The OpInf state is $x = [\operatorname{Re} h_{\ell m}; \operatorname{Im} h_{\ell m}]$
+with 77 modes ($\ell = 2, \dots, 8$). The OpInf state is $x = [\mathrm{Re} h_{\ell m}; \mathrm{Im} h_{\ell m}]$
 for the 70 modes with $m \ne 0$ ($x \in \mathbb{R}^{140}$). We train on one time window, predict
 forward, and compare with the published solution.
 
