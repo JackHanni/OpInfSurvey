@@ -1,0 +1,72 @@
+SXS:BBH:0305 Lev6 strain (doi:10.26138/SXS:BBH:0305), Δt = 0.5 M, peak of |h22| at t_peak = 3692.5 M
+State: the 70 modes with m ≠ 0 (ℓ = 2..8), as [Re; Im] ∈ R^140. Errors are relative 2-norm errors over the sphere.
+λ is chosen from training data only (fit on the first 75 % of the window, forecast the last 25 %).
+Memory: h20 = 0.004 at t = 3000, 0.030 at t_peak, 0.081 at t_peak + 50 (vs |h22| = 1.4e-02 there).
+  This non-oscillating offset would dominate every norm after merger, so m = 0 is left out.
+Kerr QNM (2,2,0) for the remnant: -0.0858 +0.5584i
+
+== Ringdown, linear model ==
+train t ∈ [3712.5, 3742.5] (61 snapshots), predict t ∈ (3743.0, 3772.5]
+   r  cols    σ_r/σ_1          λ        κ(D)   train err    pred err POD floor pr
+   2     2   8.57e-01    0.0e+00    1.17e+00    8.72e-02    3.25e-01     1.35e-01
+   4     4   6.09e-02    1.0e-05    1.64e+01    5.52e-02    2.86e-01     1.25e-01
+   6     6   3.24e-02    0.0e+00    3.08e+01    3.30e-02    2.58e-01     1.10e-01
+   8     8   1.54e-02    0.0e+00    6.48e+01    1.48e-02    1.74e-01     7.99e-02
+  10    10   8.45e-03    0.0e+00    1.18e+02    1.22e-02    1.63e-01     7.61e-02
+  12    12   5.96e-03    0.0e+00    1.68e+02    8.66e-03    1.65e-01     5.17e-02
+  14    14   3.54e-03    1.0e-06    2.83e+02    9.22e-03    1.32e-01     2.42e-02
+  16    16   1.50e-03    1.0e-07    6.67e+02    3.74e-03    1.27e-01     1.61e-02
+  18    18   9.61e-04    0.0e+00    1.04e+03    3.42e-03    1.19e-01     1.41e-02
+  20    20   5.17e-04    1.0e-08    1.93e+03    1.53e-03    1.03e-01     1.07e-02
+
+== Ringdown, quadratic model ==
+train t ∈ [3712.5, 3742.5] (61 snapshots), predict t ∈ (3743.0, 3772.5]
+   r  cols    σ_r/σ_1          λ        κ(D)   train err    pred err POD floor pr
+   2     5   8.57e-01    0.0e+00    1.31e+01    8.33e-02    2.46e-01     1.35e-01
+   4    14   6.09e-02    1.0e-09    2.64e+04    4.31e-02    1.56e-01     1.25e-01
+   6    27   3.24e-02    1.0e-12    1.83e+07    2.23e-02    1.14e-01     1.10e-01
+   8    44   1.54e-02    1.0e-12    5.33e+12    1.27e-02    9.89e-02     7.99e-02
+
+Learned Â eigenvalue closest to the Kerr QNM (linear model, ringdown window above):
+   r             eigenvalue    rel. diff
+   2    -0.0809 +0.5451i     2.52e-02
+   4    -0.0827 +0.5457i     2.32e-02
+   6    -0.0843 +0.5461i     2.20e-02
+   8    -0.0736 +0.5557i     2.22e-02
+  10    -0.0753 +0.5543i     2.00e-02
+  12    -0.0768 +0.5417i     3.35e-02
+  14    -0.0760 +0.5538i     1.92e-02
+  16    -0.0772 +0.5514i     1.96e-02
+  18    -0.0774 +0.5521i     1.85e-02
+  20    -0.0783 +0.5507i     1.90e-02
+
+== Ringdown start-time sweep: linear model, r = 2 and 16, 30 M training window ==
+start − t_peak            eig (r = 2)   rel diff           eig (r = 16)   rel diff
+           0    -0.0335 +0.4470i   2.18e-01    -0.0493 +0.4800i   1.53e-01
+           5    -0.0481 +0.4807i   1.53e-01    -0.0547 +0.5140i   9.59e-02
+          10    -0.0635 +0.5109i   9.28e-02    -0.0606 +0.5373i   5.81e-02
+          15    -0.0750 +0.5324i   4.98e-02    -0.0715 +0.5455i   3.41e-02
+          20    -0.0809 +0.5451i   2.52e-02    -0.0772 +0.5514i   1.96e-02
+          25    -0.0837 +0.5509i   1.38e-02    -0.0814 +0.5526i   1.29e-02
+          30    -0.0850 +0.5540i   7.87e-03    -0.0839 +0.5542i   8.09e-03
+
+== Inspiral, linear model ==
+train t ∈ [3300.0, 3500.0] (401 snapshots), predict t ∈ (3500.5, 3600.0]
+   r  cols    σ_r/σ_1          λ        κ(D)   train err    pred err POD floor pr
+   2     2   9.58e-01    0.0e+00    1.04e+00    4.18e-01    9.66e-01     4.21e-02
+   4     4   2.64e-02    1.0e-02    3.79e+01    4.11e-01    9.42e-01     2.99e-02
+   6     6   2.03e-02    1.0e-02    4.93e+01    4.18e-01    9.39e-01     1.05e-02
+   8     8   6.87e-03    1.0e-02    1.46e+02    4.17e-01    9.39e-01     3.41e-03
+  10    10   1.54e-03    1.0e-02    6.50e+02    4.17e-01    9.39e-01     2.60e-03
+  12    12   7.69e-04    1.0e-02    1.30e+03    4.17e-01    9.39e-01     2.30e-03
+
+== Inspiral, quadratic model ==
+train t ∈ [3300.0, 3500.0] (401 snapshots), predict t ∈ (3500.5, 3600.0]
+   r  cols    σ_r/σ_1          λ        κ(D)   train err    pred err POD floor pr
+   2     5   9.58e-01    0.0e+00    8.43e+00    4.09e-01    9.77e-01     4.21e-02
+   4    14   2.64e-02    1.0e-02    6.08e+04    4.07e-01    9.70e-01     2.99e-02
+   6    27   2.03e-02    1.0e-12    5.15e+08    7.68e-03    3.93e-01     1.05e-02
+   8    44   6.87e-03    1.0e-12    4.42e+10    1.85e-03         Inf     3.41e-03
+  10    65   1.54e-03    1.0e-12    3.96e+11    9.39e-04         Inf     2.60e-03
+
+Figures written to /home/jack/Documents/NumLinAlg/OpInfSurvey/einstein/output

@@ -381,10 +381,10 @@ footer {
 <span class="eq">D<sub>μ</sub> F<sup>μν</sup> = 0<span class="note">classical SU(2), on a lattice</span></span>
 <p>The equations of motion have both quadratic and cubic terms in the gauge field, so the model needs both operators. The new difficulty is gauge freedom: many different field configurations describe the same physical state, so snapshots must be gauge-fixed first, or POD spends its modes on gauge artifacts instead of physics. A spatially homogeneous reduction turns the problem into a small chaotic ODE system, which would be a useful warm-up.</p>
 
-<h3><span class="who both">Exploratory study done</span> Einstein field equations (Gowdy T³)</h3>
-<span class="eq">G<sub>μν</sub> = 0<span class="note">vacuum, T³ Gowdy symmetry: two coupled 1+1 wave equations for P(τ, θ), Q(τ, θ)</span></span>
-<p>Instead of spherical scalar collapse, a side study used Gowdy T³ cosmologies (Berger &amp; Moncrief, 1993): genuinely inhomogeneous vacuum solutions that reduce exactly to wave equations on a circle, with exact solutions to check against. The coefficients depend on time, so the ROM includes a known input term, <span class="math">dx̂/dt = Âx̂ + u(t)N̂x̂ + Ĥ(x̂ ⊗ x̂)</span>.</p>
-<p><strong>Polarized case</strong> (linear, exact Bessel-function data): OpInf needs the time-dependent term to predict well. With one trajectory the operators are not identifiable (cond(D) ≈ 3×10<sup>17</sup>); with two they are recovered to 10<sup>−9</sup>–10<sup>−11</sup>. <strong>Unpolarized case</strong> (nonlinear, our own validated solver): the e<sup>2P</sup> term is not polynomial, so the variables are lifted (Qian et al., 2020) to make the system exactly quadratic. Both lifted and naive OpInf fit the training data, but the lifted model predicts about 2× better and matches intrusive Galerkin. Code and results are in <code>einstein/</code> in the repository. Its README starts with a crash course on modeling Einstein’s equations, written for readers who know numerical PDEs but not general relativity: what the equations say, why gauge freedom and constraints make them hard, how symmetry reduces them to 1+1 PDEs, and what the Gowdy variables mean.</p>
+<h3><span class="who both">Exploratory study done</span> Einstein field equations (binary black hole, published data)</h3>
+<span class="eq">G<sub>μν</sub> = 0<span class="note">vacuum; data: SXS:BBH:0305, gravitational-wave strain h(t, θ, φ) as 77 spherical-harmonic modes</span></span>
+<p>We don’t solve Einstein’s equations ourselves. The data is a published numerical-relativity simulation from the SXS catalog (<a href="https://doi.org/10.26138/SXS:BBH:0305">SXS:BBH:0305</a>, the GW150914-like merger of two spinning black holes). The state is the real and imaginary parts of the 70 strain modes with m ≠ 0 (x ∈ ℝ<sup>140</sup>). OpInf is trained on one time window and its prediction is compared with the published solution.</p>
+<p><strong>Ringdown</strong> (after merger): linear dynamics, so a linear model <span class="math">dx̂/dt = Âx̂</span> fits it. The learned Â contains the remnant’s Kerr quasinormal-mode frequency to within 0.8–2 %, and the match improves as training starts later after merger, showing when the dynamics become linear. <strong>Inspiral</strong> (before merger): the waveform chirps, which a linear model can’t represent. A quadratic model at r = 6 fits training to 0.8 % but predicts only about 40 M ahead within 5 %, and with r ≥ 8 it blows up (κ(D) ≥ 4×10<sup>10</sup>). Code and results are in <code>einstein/</code> in the repository. Its README starts with a crash course on modeling Einstein’s equations and on what simulation catalogs publish, written for readers who know numerical PDEs but not general relativity.</p>
 
 <div class="table-wrap">
 <table>
@@ -395,7 +395,7 @@ footer {
     <tr><td>Navier–Stokes</td><td>Quadratic</td><td>135</td><td>Large state; cheap SVD</td></tr>
     <tr><td>NLS</td><td>Cubic</td><td>695</td><td>Conditioning; conserved quantities</td></tr>
     <tr><td>Yang–Mills</td><td>Quadratic + cubic</td><td>815</td><td>Gauge freedom</td></tr>
-    <tr><td>Einstein (Gowdy T³, done)</td><td>Quadratic after lifting, plus input term</td><td>Grows with lifted variables</td><td>Non-polynomial terms; time-dependent coefficients</td></tr>
+    <tr><td>Einstein (SXS binary black hole, done)</td><td>Linear (ringdown), quadratic (inspiral)</td><td>15 linear, 135 quadratic</td><td>Published data only; the chirp is not polynomial in h</td></tr>
   </tbody>
 </table>
 </div>

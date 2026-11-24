@@ -9,5 +9,5 @@ Manifest.toml
 # Claude Code personal settings
 .claude/settings.local.json
 
-# large regenerable data from the Einstein side study
-einstein/output/*.jld2
+# downloaded Einstein (SXS) data, regenerate with einstein/fetch_sxs.py
+einstein/data/
