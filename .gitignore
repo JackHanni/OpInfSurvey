@@ -11,3 +11,6 @@ Manifest.toml
 
 # downloaded Einstein (SXS) data, regenerate with einstein/fetch_sxs.py
 einstein/data/
+
+# Python bytecode
+__pycache__/

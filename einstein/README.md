@@ -8,8 +8,25 @@ compare with the true solution.
 ## Crash course: modeling Einstein's equations
 
 This section is for readers who know numerical PDEs and linear algebra but not general relativity.
-It covers just enough to follow the rest of this README. Units are geometric ($G = c = 1$), and for
-a binary, times and lengths are measured in units of the total mass $M$.
+It covers just enough to follow the rest of this README.
+
+**Units.** Numerical relativity uses geometric units, $G = c = 1$, in which mass, length and time
+are all the same kind of quantity. For a binary, everything is measured in units of the total mass
+$M$ of the two black holes:
+
+$$
+1\,M \text{ of time} = \frac{GM}{c^3} \approx 4.93\,\mu\text{s} \times \frac{M}{M_\odot},
+\qquad
+1\,M \text{ of length} = \frac{GM}{c^2} \approx 1.48\,\text{km} \times \frac{M}{M_\odot}.
+$$
+
+The vacuum Einstein equations have no built-in length scale, so one simulation describes a binary
+of *any* total mass: pick $M$ and the times and lengths follow. For a GW150914-like binary
+($M \approx 65\,M_\odot$), $1\,M \approx 0.32$ ms, so the 3500 M of data used here last about a
+second and the ringdown window (30 M) about 10 ms. For a $10^6\,M_\odot$ supermassive binary the
+same data would span about 5 hours. The strain is likewise given as $r h / M$, the strain at
+distance $r$ rescaled, which is why its values are around 0.1 rather than the $10^{-21}$ measured
+at Earth.
 
 ### 1. What the equations say
 
