@@ -38,9 +38,9 @@ $$
 2. **Constraints and evolution.** Split spacetime into slices of constant time (the **3+1** or ADM
    split):
 
-   $$
-   ds^2 = -\alpha^2\,dt^2 + \gamma_{ij}\,(dx^i + \beta^i dt)(dx^j + \beta^j dt)
-   $$
+$$
+ds^2 = -\alpha^2\,dt^2 + \gamma_{ij}\,(dx^i + \beta^i dt)(dx^j + \beta^j dt)
+$$
 
    Here $\gamma_{ij}$ is the metric within a slice, $\alpha$ (lapse) sets how far apart in proper time the slices
    are, and $\beta^i$ (shift) sets how spatial coordinates move between slices. Einstein's equations then
@@ -53,9 +53,11 @@ $$
 
    The exact evolution preserves the constraints, but discretization error does not. Constraint
    violation can grow and wreck a simulation, so monitoring it is a standard accuracy check.
+   
 3. **Well-posedness.** The original ADM evolution equations are only weakly hyperbolic and tend to
    blow up numerically. Production codes use reformulations (BSSN, generalized harmonic) that are
    strongly hyperbolic. This is part of why full 3D numerical relativity took decades.
+
 4. **Singularities.** Black holes and big-bang/big-crunch singularities are places where curvature
    blows up. Codes must avoid them (excision, special gauges) or approach them carefully.
 
@@ -78,9 +80,9 @@ $$
   $h = h_+ - i\,h_\times$, as a function of time and direction on the sky $(\theta, \phi)$. It is expanded in
   spin-weighted spherical harmonics,
 
-  $$
-  h(t, \theta, \phi) = \sum_{\ell \ge 2} \sum_{|m| \le \ell} h_{\ell m}(t)\, {}_{-2}Y_{\ell m}(\theta, \phi).
-  $$
+$$
+h(t, \theta, \phi) = \sum_{\ell \ge 2} \sum_{|m| \le \ell} h_{\ell m}(t)\, {}_{-2}Y_{\ell m}(\theta, \phi).
+$$
 
   The mode amplitudes $h_{\ell m}(t)$ are the data. They are a time-dependent field on the sphere,
   discretized spectrally, which is exactly the kind of state OpInf works with.
@@ -126,7 +128,7 @@ with the true solution.
 - **What is published:** the gravitational-wave strain at infinity,
   $h(t, \theta, \phi) = \sum h_{\ell m}(t)\, {}_{-2}Y_{\ell m}(\theta, \phi)$, as 77 complex modes ($\ell = 2, \dots, 8$), extrapolated to infinite
   radius ($N = 2$). It is a time-dependent field on the sphere, in units of the total mass $M$.
-- **State used for OpInf:** $x(t) = [\operatorname{Re} h_{\ell m};\ \operatorname{Im} h_{\ell m}]$ for the 70 modes with $m \ne 0$, so $x \in \mathbb{R}^{140}$.
+- **State used for OpInf:** $x(t) = [\mathrm{Re} h_{\ell m};\ \mathrm{Im} h_{\ell m}]$ for the 70 modes with $m \ne 0$, so $x \in \mathbb{R}^{140}$.
   The harmonics are orthonormal, so $\|x\|$ is the $L^2$ norm of $h$ on the sphere.
 - **$m = 0$ modes left out:** after merger they are dominated by the gravitational-wave *memory*, a
   permanent offset ($h_{20} \approx 0.08$), while the oscillating part decays to around 1e-3. Kept in, the
