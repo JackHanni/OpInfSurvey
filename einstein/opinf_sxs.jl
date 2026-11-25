@@ -12,118 +12,199 @@
 #   inspiral: the last orbits before merger, where the frequency chirps upward.
 # Models: linear  dx̂/dt = Â x̂, and quadratic  dx̂/dt = Â x̂ + Ĥ (x̂ ⊗ x̂).
 #
+# Notation follows the README: V is the POD basis, X the snapshot matrix, D the OpInf data
+# matrix, R the reduced time derivatives, O = [Â Ĥ] the learned operators, λ the Tikhonov
+# parameter, r the ROM dimension.
+#
 # Run:  julia einstein/opinf_sxs.jl
 
 using JLD2, LinearAlgebra, Printf, Plots
 
 const HERE = @__DIR__
 const OUTDIR = mkpath(joinpath(HERE, "output"))
-const LOG = Ref{IO}(devnull)
-logln(s...) = (println(s...); println(LOG[], s...); flush(LOG[]))
+const LOG_FILE = Ref{IO}(devnull)   # set to output/sxs_log.txt when this file is run as a script
+
+"Print to the terminal and to the log file."
+function logln(parts...)
+    println(parts...)
+    println(LOG_FILE[], parts...)
+    flush(LOG_FILE[])
+end
+
+const LAMBDA_GRID = [0.0; 10.0 .^ (-12:1:-2)]
 
 # ---------------------------------------------------------------- data
-# drop_m0: leave out the m = 0 modes. After merger they are dominated by the gravitational-wave
-# memory, a non-oscillating offset (|h20| ≈ 0.08) that swamps the decaying ringdown in any norm,
-# and they are the least reliable modes of extrapolated SXS waveforms.
-function load_sxs(path = joinpath(HERE, "data", "sxs_bbh_0305.h5"); drop_m0 = true)
-    f = jldopen(path, "r")
-    t = vec(f["t"])
-    # h5py writes row-major (n_t, n_modes); Julia reads it transposed as (n_modes, n_t)
-    ell, m = vec(f["ell"]), vec(f["m"])
-    keep = drop_m0 ? findall(m .!= 0) : collect(eachindex(m))
-    X = vcat(f["h_re"][keep, :], f["h_im"][keep, :])
-    Xd = vcat(f["hdot_re"][keep, :], f["hdot_im"][keep, :])
-    close(f)
-    return t, X, Xd, ell[keep], m[keep]
+const SXS_FILE = joinpath(HERE, "data", "sxs_bbh_0305.h5")
+
+"""
+    load_sxs(path = SXS_FILE; drop_m0 = true) -> (; t, X, dXdt, ell, m)
+
+Load the strain written by `fetch_sxs.py`.
+
+- `t`:      times (length n_t), in units of M
+- `X`:      states x(t) = [Re h_lm; Im h_lm], size (2·n_modes, n_t)
+- `dXdt`:   their time derivatives, same layout
+- `ell, m`: the (ℓ, m) of each mode, so row i of X is Re h for mode i and row n_modes + i is Im h
+
+With `drop_m0 = true` the m = 0 modes are left out. After merger they are dominated by the
+gravitational-wave memory, a non-oscillating offset (|h20| ≈ 0.08) that swamps the decaying
+ringdown in any norm, and they are the least reliable modes of extrapolated SXS waveforms.
+"""
+function load_sxs(path = SXS_FILE; drop_m0 = true)
+    jldopen(path, "r") do file
+        t   = vec(file["t"])
+        ell = vec(file["ell"])
+        m   = vec(file["m"])
+        if drop_m0
+            modes = findall(m .!= 0)
+        else
+            modes = eachindex(m)
+        end
+
+        stack_re_im(name) = vcat(file["$(name)_re"][modes, :], file["$(name)_im"][modes, :])
+
+        return (; t, X = stack_re_im("h"), dXdt = stack_re_im("hdot"), ell = ell[modes], m = m[modes])
+    end
 end
 
 # ---------------------------------------------------------------- OpInf pieces
+"The r(r+1)/2 distinct products x_i x_j (j ≤ i): x ⊗ x without the repeated entries."
 compact_kron(x) = [x[i] * x[j] for i in eachindex(x) for j in 1:i]
 
-function data_matrix(Qh, quad)
-    quad || return Matrix(Qh')
-    return hcat(Qh', reduce(hcat, compact_kron.(eachcol(Qh)))')
+"Number of unknowns per row of O, i.e. the number of columns of D."
+n_unknowns(r, quadratic) = quadratic ? r + r * (r + 1) ÷ 2 : r
+
+"""
+OpInf data matrix D, one row per snapshot: [q̂ᵀ] for the linear model,
+[q̂ᵀ  compact_kron(q̂)ᵀ] for the quadratic one. `reduced_states` has one snapshot per column.
+"""
+function data_matrix(reduced_states, quadratic)
+    linear_part = Matrix(reduced_states')
+    if !quadratic
+        return linear_part
+    end
+    quadratic_part = reduce(hcat, compact_kron.(eachcol(reduced_states)))'
+    return hcat(linear_part, quadratic_part)
 end
 
-# Tikhonov-regularized least squares via Householder QR of [D; √λ I]
-function solve_ls(D, R, λ)
-    n = size(D, 2)
-    A = vcat(D, sqrt(λ) * Matrix(I, n, n))
-    B = vcat(R, zeros(n, size(R, 2)))
-    F = qr(A)
-    return Matrix((UpperTriangular(F.R) \ (F.Q' * B)[1:n, :])')   # O = [Â Ĥ]
+"Tikhonov-regularized least squares min ‖D Oᵀ − R‖² + λ‖O‖², via Householder QR of [D; √λ I]."
+function solve_least_squares(D, R, λ)
+    n_cols = size(D, 2)
+    D_stacked = vcat(D, sqrt(λ) * I)
+    R_stacked = vcat(R, zeros(n_cols, size(R, 2)))
+    qr_D = qr(D_stacked)
+    Oᵀ = UpperTriangular(qr_D.R) \ (qr_D.Q' * R_stacked)[1:n_cols, :]
+    return Matrix(Oᵀ')
 end
 
-function rom_rhs(O, r, quad)
+"Right-hand side x̂ ↦ Â x̂ (+ Ĥ (x̂ ⊗ x̂)) of the learned ROM, with O = [Â Ĥ]."
+function rom_rhs(O, r, quadratic)
     Â = O[:, 1:r]
-    quad || return x -> Â * x
+    if !quadratic
+        return x̂ -> Â * x̂
+    end
     Ĥ = O[:, r+1:end]
-    return x -> Â * x + Ĥ * compact_kron(x)
+    return x̂ -> Â * x̂ + Ĥ * compact_kron(x̂)
 end
 
-# RK4 on the saved times with `sub` substeps; stops (NaN) if the state leaves a bound
-function integrate(f, x0, ts; sub = 5, bound = Inf)
-    Xs = fill(NaN, length(x0), length(ts))
-    x = copy(x0); Xs[:, 1] = x
-    for k in 2:length(ts)
-        h = (ts[k] - ts[k-1]) / sub
-        for _ in 1:sub
-            k1 = f(x); k2 = f(x + h/2*k1); k3 = f(x + h/2*k2); k4 = f(x + h*k3)
-            x = x + h/6*(k1 + 2k2 + 2k3 + k4)
+"""
+RK4 from `x0` over `times`, with `substeps` steps per interval. Returns the state at each time,
+one per column. If the state blows up (non-finite or norm ≥ `max_norm`), the integration stops
+and the remaining columns stay NaN.
+"""
+function integrate(rhs, x0, times; substeps = 5, max_norm = Inf)
+    states = fill(NaN, length(x0), length(times))
+    x = copy(x0)
+    states[:, 1] = x
+    for k in 2:length(times)
+        dt = (times[k] - times[k-1]) / substeps
+        for _ in 1:substeps
+            k1 = rhs(x); k2 = rhs(x + dt/2*k1); k3 = rhs(x + dt/2*k2); k4 = rhs(x + dt*k3)
+            x = x + dt/6*(k1 + 2k2 + 2k3 + k4)
         end
-        (all(isfinite, x) && norm(x) < bound) || return Xs
-        Xs[:, k] = x
+        blew_up = !all(isfinite, x) || norm(x) >= max_norm
+        if blew_up
+            return states
+        end
+        states[:, k] = x
     end
-    return Xs
+    return states
 end
 
-relerr(A, B) = any(isnan, A) ? Inf : norm(A - B) / norm(B)
+"‖A − B‖ / ‖B‖, or Inf if A contains NaN (a ROM that blew up)."
+relative_error(A, B) = any(isnan, A) ? Inf : norm(A - B) / norm(B)
 
-# Fit at a given λ on training indices, return operators
-fit(V, X, Xd, idx, r, quad, λ) = solve_ls(data_matrix(V' * X[:, idx], quad), (V' * Xd[:, idx])', λ)
+"Relative error of each column (time) separately."
+relative_error_per_time(A, B) = [norm(A[:, k] - B[:, k]) / norm(B[:, k]) for k in axes(B, 2)]
 
-# Choose λ using the training window only: fit on the first 75 %, forecast the last 25 %.
-function choose_lambda(V, X, Xd, t, itr, r, quad, λs)
-    ncut = round(Int, 0.75 * length(itr))
-    ifit, ival = itr[1:ncut], itr[ncut:end]
-    bound = 10 * maximum(norm.(eachcol(V' * X[:, itr])))
-    best = (Inf, λs[1])
-    for λ in λs
-        O = fit(V, X, Xd, ifit, r, quad, λ)
-        Xr = integrate(rom_rhs(O, r, quad), V' * X[:, ifit[1]], t[ifit[1]:ival[end]]; bound)
-        e = relerr(V * Xr[:, ncut:end], X[:, ival])
-        e < best[1] && (best = (e, λ))
+"Learn O = [Â Ĥ] at a given λ from the snapshots in `snapshot_idx`."
+function fit_operators(V, X, dXdt, snapshot_idx, quadratic, λ)
+    D = data_matrix(V' * X[:, snapshot_idx], quadratic)
+    R = (V' * dXdt[:, snapshot_idx])'
+    return solve_least_squares(D, R, λ)
+end
+
+"""
+Choose λ using the training window only: fit on the first 75 % of it, run the ROM through the
+whole window, and keep the λ with the smallest error on the held-out last 25 %.
+"""
+function choose_lambda(V, X, dXdt, t, train_idx, r, quadratic, λ_grid)
+    n_fit = round(Int, 0.75 * length(train_idx))
+    fit_idx     = train_idx[1:n_fit]
+    holdout_idx = train_idx[n_fit:end]
+    max_norm = 10 * maximum(norm.(eachcol(V' * X[:, train_idx])))
+
+    best_err, best_λ = Inf, λ_grid[1]
+    for λ in λ_grid
+        O = fit_operators(V, X, dXdt, fit_idx, quadratic, λ)
+        reduced_rom = integrate(rom_rhs(O, r, quadratic), V' * X[:, fit_idx[1]],
+                                t[fit_idx[1]:holdout_idx[end]]; max_norm)
+        # reduced_rom starts at the first training snapshot, so its columns n_fit:end are
+        # the times holdout_idx.
+        holdout_err = relative_error(V * reduced_rom[:, n_fit:end], X[:, holdout_idx])
+        if holdout_err < best_err
+            best_err, best_λ = holdout_err, λ
+        end
     end
-    return best[2]
+    return best_λ
 end
 
 # ---------------------------------------------------------------- one experiment
-function run_experiment(name, t, X, Xd, itr, ipr, rs, quad; λs = [0.0; 10.0 .^ (-12:1:-2)])
-    model = quad ? "quadratic" : "linear"
+"""
+Train linear or quadratic OpInf ROMs on `train_idx` for each r in `r_values`, predict over
+`predict_idx`, log a table, and return one named tuple of results per r.
+"""
+function run_experiment(name, t, X, dXdt, train_idx, predict_idx, r_values, quadratic; λ_grid = LAMBDA_GRID)
+    model = quadratic ? "quadratic" : "linear"
     logln("\n== $name, $model model ==")
     logln(@sprintf("train t ∈ [%.1f, %.1f] (%d snapshots), predict t ∈ (%.1f, %.1f]",
-                   t[itr[1]], t[itr[end]], length(itr), t[ipr[1]], t[ipr[end]]))
+                   t[train_idx[1]], t[train_idx[end]], length(train_idx), t[predict_idx[1]], t[predict_idx[end]]))
     logln(@sprintf("%4s %5s %10s %10s %11s %11s %11s %12s", "r", "cols", "σ_r/σ_1",
                    "λ", "κ(D)", "train err", "pred err", "POD floor pr"))
-    U, S, _ = svd(X[:, itr])
-    iall = itr[1]:ipr[end]
+    pod_modes, singular_values, _ = svd(X[:, train_idx])
+    window_idx = train_idx[1]:predict_idx[end]
+    n_train = length(train_idx)
     results = []
-    for r in rs
-        p = quad ? r + r * (r + 1) ÷ 2 : r
-        p < length(itr) || continue
-        V = U[:, 1:r]
-        λ = choose_lambda(V, X, Xd, t, itr, r, quad, λs)
-        O = fit(V, X, Xd, itr, r, quad, λ)
-        κ = cond(data_matrix(V' * X[:, itr], quad))
-        bound = 10 * maximum(norm.(eachcol(X[:, iall])))
-        Xr = V * integrate(rom_rhs(O, r, quad), V' * X[:, itr[1]], t[iall]; bound)
-        ntr = length(itr)
-        etr = relerr(Xr[:, 1:ntr], X[:, itr])
-        epr = relerr(Xr[:, ntr:end], X[:, itr[end]:ipr[end]])
-        floor_pr = norm(X[:, ipr] - V * (V' * X[:, ipr])) / norm(X[:, ipr])
+    for r in r_values
+        n_cols = n_unknowns(r, quadratic)
+        if n_cols >= n_train      # underdetermined: more unknowns than snapshots
+            continue
+        end
+        V = pod_modes[:, 1:r]
+        λ = choose_lambda(V, X, dXdt, t, train_idx, r, quadratic, λ_grid)
+        O = fit_operators(V, X, dXdt, train_idx, quadratic, λ)
+        κ = cond(data_matrix(V' * X[:, train_idx], quadratic))
+
+        max_norm = 10 * maximum(norm.(eachcol(X[:, window_idx]))) # mult by 10 for a little extra safety
+        X_rom = V * integrate(rom_rhs(O, r, quadratic), V' * X[:, train_idx[1]], t[window_idx]; max_norm)
+        train_err   = relative_error(X_rom[:, 1:n_train], X[:, train_idx])
+        predict_err = relative_error(X_rom[:, n_train:end], X[:, train_idx[end]:predict_idx[end]])
+        X_predict = X[:, predict_idx]
+        pod_floor = norm(X_predict - V * (V' * X_predict)) / norm(X_predict)
+
         logln(@sprintf("%4d %5d %10.2e %10.1e %11.2e %11.2e %11.2e %12.2e",
-                       r, p, S[r] / S[1], λ, κ, etr, epr, floor_pr))
-        push!(results, (; r, λ, κ, etr, epr, floor_pr, Xr, O, V))
+                       r, n_cols, singular_values[r] / singular_values[1], λ, κ, train_err, predict_err, pod_floor))
+        push!(results, (; r, λ, κ, train_err, predict_err, pod_floor, X_rom, O, V))
     end
     return results
 end
@@ -139,126 +220,144 @@ function kerr_qnm_220(Mf = 0.95203, χ = 0.69209)
     return complex(-ωR / (2Q), ωR)   # growth rate of the state: x ∝ e^{(−ω_I ± i ω_R) t}
 end
 
-# eigenvalue of the learned Â closest to the Kerr QNM (upper half plane)
-function closest_eig(O, r, target)
-    ev = eigvals(O[:, 1:r])
-    return ev[argmin(abs.(ev .- target))]
+"Eigenvalue of the learned Â = O[:, 1:r] closest to `target`."
+function closest_eigenvalue(O, r, target)
+    eigenvalues = eigvals(O[:, 1:r])
+    return eigenvalues[argmin(abs.(eigenvalues .- target))]
 end
-
-relerr_t(A, B) = [norm(A[:, k] - B[:, k]) / norm(B[:, k]) for k in axes(B, 2)]
 
 # ---------------------------------------------------------------- main
 if abspath(PROGRAM_FILE) == @__FILE__
-LOG[] = open(joinpath(OUTDIR, "sxs_log.txt"), "w")
-t, X, Xd, ell, m = load_sxs()
-i22 = findfirst((ell .== 2) .& (m .== 2))
-nm = length(ell)
-amp22 = hypot.(X[i22, :], X[nm+i22, :])
-tpk = t[argmax(amp22)]
-window(a, b) = findall(a .<= t .<= b)
+LOG_FILE[] = open(joinpath(OUTDIR, "sxs_log.txt"), "w")
+t, X, dXdt, ell, m = load_sxs()
+n_modes = length(ell)
+row_h22 = findfirst((ell .== 2) .& (m .== 2))          # row of Re h22 in X; Im h22 is row n_modes + row_h22
+amplitude_h22 = hypot.(X[row_h22, :], X[n_modes + row_h22, :])
+t_peak = t[argmax(amplitude_h22)]
+time_window(t_start, t_end) = findall(t_start .<= t .<= t_end)
+nearest_time(t_target) = argmin(abs.(t .- t_target))
 
 logln("SXS:BBH:0305 Lev6 strain (doi:10.26138/SXS:BBH:0305), Δt = $(t[2]-t[1]) M, ",
-      "peak of |h22| at t_peak = $(round(tpk, digits=1)) M")
-logln("State: the $(nm) modes with m ≠ 0 (ℓ = 2..8), as [Re; Im] ∈ R^$(2nm). ",
+      "peak of |h22| at t_peak = $(round(t_peak, digits=1)) M")
+logln("State: the $(n_modes) modes with m ≠ 0 (ℓ = 2..8), as [Re; Im] ∈ R^$(2n_modes). ",
       "Errors are relative 2-norm errors over the sphere.")
 logln("λ is chosen from training data only (fit on the first 75 % of the window, forecast the last 25 %).")
 
 # memory (m = 0) modes, reported but not modelled
-_, X0, _, ell0, m0 = load_sxs(drop_m0 = false)
-i20 = findfirst((ell0 .== 2) .& (m0 .== 0))
+_, X_with_m0, _, ell_with_m0, m_with_m0 = load_sxs(drop_m0 = false)
+row_h20 = findfirst((ell_with_m0 .== 2) .& (m_with_m0 .== 0))
 logln(@sprintf("Memory: h20 = %.3f at t = 3000, %.3f at t_peak, %.3f at t_peak + 50 (vs |h22| = %.1e there).",
-               X0[i20, argmin(abs.(t .- 3000))], X0[i20, argmin(abs.(t .- tpk))],
-               X0[i20, argmin(abs.(t .- tpk .- 50))], amp22[argmin(abs.(t .- tpk .- 50))]))
+               X_with_m0[row_h20, nearest_time(3000)], X_with_m0[row_h20, nearest_time(t_peak)],
+               X_with_m0[row_h20, nearest_time(t_peak + 50)], amplitude_h22[nearest_time(t_peak + 50)]))
 logln("  This non-oscillating offset would dominate every norm after merger, so m = 0 is left out.")
 
 qnm = kerr_qnm_220()
 logln(@sprintf("Kerr QNM (2,2,0) for the remnant: %.4f %+.4fi", real(qnm), imag(qnm)))
 
 # ---- 1. Ringdown: train 20–50 M after the peak, predict to 80 M after the peak
-rd_tr, rd_pr = window(tpk + 20, tpk + 50), window(tpk + 50.5, tpk + 80)
-rd_lin  = run_experiment("Ringdown", t, X, Xd, rd_tr, rd_pr, 2:2:20, false)
-rd_quad = run_experiment("Ringdown", t, X, Xd, rd_tr, rd_pr, 2:2:8, true)
+ringdown_train   = time_window(t_peak + 20, t_peak + 50)
+ringdown_predict = time_window(t_peak + 50.5, t_peak + 80)
+ringdown_linear    = run_experiment("Ringdown", t, X, dXdt, ringdown_train, ringdown_predict, 2:2:20, false)
+ringdown_quadratic = run_experiment("Ringdown", t, X, dXdt, ringdown_train, ringdown_predict, 2:2:8, true)
 
 logln("\nLearned Â eigenvalue closest to the Kerr QNM (linear model, ringdown window above):")
 logln(@sprintf("%4s %22s %12s", "r", "eigenvalue", "rel. diff"))
-for x in rd_lin
-    e = closest_eig(x.O, x.r, qnm)
-    logln(@sprintf("%4d %10.4f %+.4fi %12.2e", x.r, real(e), imag(e), abs(e - qnm) / abs(qnm)))
+for result in ringdown_linear
+    eigenvalue = closest_eigenvalue(result.O, result.r, qnm)
+    logln(@sprintf("%4d %10.4f %+.4fi %12.2e", result.r, real(eigenvalue), imag(eigenvalue),
+                   abs(eigenvalue - qnm) / abs(qnm)))
 end
 
 # ---- 2. When does the post-merger signal become linear? Slide the 30 M training window.
 logln("\n== Ringdown start-time sweep: linear model, r = 2 and 16, 30 M training window ==")
 logln(@sprintf("%12s %22s %10s %22s %10s", "start − t_peak", "eig (r = 2)", "rel diff", "eig (r = 16)", "rel diff"))
-starts = [0, 5, 10, 15, 20, 25, 30]
-sweep = map(starts) do s0
-    itr = window(tpk + s0, tpk + s0 + 30)
-    U = svd(X[:, itr]).U
-    row = map((2, 16)) do r
-        V = U[:, 1:r]
-        λ = choose_lambda(V, X, Xd, t, itr, r, false, [0.0; 10.0 .^ (-12:1:-2)])
-        closest_eig(fit(V, X, Xd, itr, r, false, λ), r, qnm)
+sweep_r_values = (2, 16)
+start_offsets = [0, 5, 10, 15, 20, 25, 30]
+# sweep_eigenvalues[i][j]: closest eigenvalue for start_offsets[i] and sweep_r_values[j]
+sweep_eigenvalues = map(start_offsets) do offset
+    train_idx = time_window(t_peak + offset, t_peak + offset + 30)
+    pod_modes = svd(X[:, train_idx]).U
+    eigenvalues = map(sweep_r_values) do r
+        V = pod_modes[:, 1:r]
+        λ = choose_lambda(V, X, dXdt, t, train_idx, r, false, LAMBDA_GRID)
+        closest_eigenvalue(fit_operators(V, X, dXdt, train_idx, false, λ), r, qnm)
     end
-    logln(@sprintf("%12d %10.4f %+.4fi %10.2e %10.4f %+.4fi %10.2e", s0,
-                   real(row[1]), imag(row[1]), abs(row[1] - qnm) / abs(qnm),
-                   real(row[2]), imag(row[2]), abs(row[2] - qnm) / abs(qnm)))
-    row
+    logln(@sprintf("%12d %10.4f %+.4fi %10.2e %10.4f %+.4fi %10.2e", offset,
+                   real(eigenvalues[1]), imag(eigenvalues[1]), abs(eigenvalues[1] - qnm) / abs(qnm),
+                   real(eigenvalues[2]), imag(eigenvalues[2]), abs(eigenvalues[2] - qnm) / abs(qnm)))
+    eigenvalues
 end
 
 # ---- 3. Inspiral: train on [3300, 3500] M, predict [3500, 3600] M (merger is at ≈ 3692 M)
-in_tr, in_pr = window(3300, 3500), window(3500.5, 3600)
-in_lin  = run_experiment("Inspiral", t, X, Xd, in_tr, in_pr, 2:2:12, false)
-in_quad = run_experiment("Inspiral", t, X, Xd, in_tr, in_pr, 2:2:10, true)
+inspiral_train   = time_window(3300, 3500)
+inspiral_predict = time_window(3500.5, 3600)
+inspiral_linear    = run_experiment("Inspiral", t, X, dXdt, inspiral_train, inspiral_predict, 2:2:12, false)
+inspiral_quadratic = run_experiment("Inspiral", t, X, dXdt, inspiral_train, inspiral_predict, 2:2:10, true)
 
 # ---------------------------------------------------------------- figures
-best(res) = res[argmin([x.epr for x in res])]
+best_prediction(results) = results[argmin([result.predict_err for result in results])]
 
-function plot_h22(name, itr, ipr, res_lin, res_quad, fname; logamp = false)
-    iall = itr[1]:ipr[end]
-    bl, bq = best(res_lin), best(res_quad)
-    p1 = plot(t[iall], X[i22, iall], lw = 3, c = :black, label = "true (SXS)",
-              ylabel = "Re h₂₂", title = "$name: h₂₂ mode")
-    plot!(p1, t[iall], bl.Xr[i22, :], lw = 1.5, ls = :dash, c = :blue, label = "OpInf linear, r = $(bl.r)")
-    plot!(p1, t[iall], bq.Xr[i22, :], lw = 1.5, ls = :dot, c = :red, label = "OpInf quadratic, r = $(bq.r)")
-    vline!(p1, [t[itr[end]]], c = :gray, ls = :dash, label = "end of training")
-    p2 = plot(t[iall], relerr_t(bl.Xr, X[:, iall]), yscale = :log10, c = :blue, lw = 1.5,
-              label = "linear", xlabel = "t / M", ylabel = "‖x_ROM − x‖ / ‖x‖")
-    e = relerr_t(bq.Xr, X[:, iall]); e[.!isfinite.(e)] .= NaN
-    plot!(p2, t[iall], e, c = :red, lw = 1.5, label = "quadratic")
-    vline!(p2, [t[itr[end]]], c = :gray, ls = :dash, label = "")
-    savefig(plot(p1, p2, layout = (2, 1), size = (800, 650)), joinpath(OUTDIR, fname))
+function plot_h22(name, train_idx, predict_idx, results_linear, results_quadratic, filename)
+    window_idx = train_idx[1]:predict_idx[end]
+    best_linear, best_quadratic = best_prediction(results_linear), best_prediction(results_quadratic)
+
+    waveform_plot = plot(t[window_idx], X[row_h22, window_idx], lw = 3, c = :black, label = "true (SXS)",
+                         ylabel = "Re h₂₂", title = "$name: h₂₂ mode")
+    plot!(waveform_plot, t[window_idx], best_linear.X_rom[row_h22, :], lw = 1.5, ls = :dash, c = :blue,
+          label = "OpInf linear, r = $(best_linear.r)")
+    plot!(waveform_plot, t[window_idx], best_quadratic.X_rom[row_h22, :], lw = 1.5, ls = :dot, c = :red,
+          label = "OpInf quadratic, r = $(best_quadratic.r)")
+    vline!(waveform_plot, [t[train_idx[end]]], c = :gray, ls = :dash, label = "end of training")
+
+    error_plot = plot(t[window_idx], relative_error_per_time(best_linear.X_rom, X[:, window_idx]),
+                      yscale = :log10, c = :blue, lw = 1.5,
+                      label = "linear", xlabel = "t / M", ylabel = "‖x_ROM − x‖ / ‖x‖")
+    quadratic_error = relative_error_per_time(best_quadratic.X_rom, X[:, window_idx])
+    quadratic_error[.!isfinite.(quadratic_error)] .= NaN      # leave gaps where the ROM blew up
+    plot!(error_plot, t[window_idx], quadratic_error, c = :red, lw = 1.5, label = "quadratic")
+    vline!(error_plot, [t[train_idx[end]]], c = :gray, ls = :dash, label = "")
+
+    savefig(plot(waveform_plot, error_plot, layout = (2, 1), size = (800, 650)), joinpath(OUTDIR, filename))
 end
 
-function plot_err(name, rl, rq, fname)
-    clip(v) = min.(v, 10.0)
+function plot_error_vs_r(name, results_linear, results_quadratic, filename)
+    clip(values) = min.(values, 10.0)
+    r_of(results) = [result.r for result in results]
+    predict_errors(results) = clip([result.predict_err for result in results])
+
     plt = plot(yscale = :log10, xlabel = "r", ylabel = "relative error (prediction window)",
                title = "$name: prediction error vs r", legend = :bottomleft)
-    plot!(plt, [x.r for x in rl], clip([x.epr for x in rl]), m = :o, label = "OpInf linear")
-    plot!(plt, [x.r for x in rq], clip([x.epr for x in rq]), m = :s, label = "OpInf quadratic")
-    plot!(plt, [x.r for x in rl], [x.floor_pr for x in rl], ls = :dash, c = :black,
+    plot!(plt, r_of(results_linear), predict_errors(results_linear), marker = :circle, label = "OpInf linear")
+    plot!(plt, r_of(results_quadratic), predict_errors(results_quadratic), marker = :square, label = "OpInf quadratic")
+    plot!(plt, r_of(results_linear), [result.pod_floor for result in results_linear], ls = :dash, c = :black,
           label = "POD floor (training basis)")
-    savefig(plt, joinpath(OUTDIR, fname))
+    savefig(plt, joinpath(OUTDIR, filename))
 end
 
-function plot_qnm(fname)
-    x = rd_lin[findfirst(z -> z.r == 16, rd_lin)]
-    ev = eigvals(x.O[:, 1:x.r])
-    plt = scatter(real.(ev), imag.(ev), label = "eigenvalues of learned Â (r = 16)",
-                  xlabel = "Re (decay rate)", ylabel = "Im (frequency)",
-                  title = "Ringdown: learned spectrum vs Kerr QNM")
-    scatter!(plt, [real(qnm), real(qnm)], [imag(qnm), -imag(qnm)], m = :star5, ms = 10,
+function plot_qnm(filename)
+    result_r16 = ringdown_linear[findfirst(result -> result.r == 16, ringdown_linear)]
+    eigenvalues = eigvals(result_r16.O[:, 1:result_r16.r])
+    spectrum_plot = scatter(real.(eigenvalues), imag.(eigenvalues), label = "eigenvalues of learned Â (r = 16)",
+                            xlabel = "Re (decay rate)", ylabel = "Im (frequency)",
+                            title = "Ringdown: learned spectrum vs Kerr QNM")
+    scatter!(spectrum_plot, [real(qnm), real(qnm)], [imag(qnm), -imag(qnm)], marker = :star5, markersize = 10,
              c = :red, label = "Kerr (2,2,0) QNM, Berti et al. fit")
-    p2 = plot(starts, [abs(r[1] - qnm) / abs(qnm) for r in sweep], m = :o, yscale = :log10,
-              label = "r = 2", xlabel = "training start − t_peak (M)",
-              ylabel = "|λ − ω_QNM| / |ω_QNM|", title = "Learned frequency vs training start")
-    plot!(p2, starts, [abs(r[2] - qnm) / abs(qnm) for r in sweep], m = :s, label = "r = 16")
-    savefig(plot(plt, p2, layout = (1, 2), size = (1100, 450), margin = 5Plots.mm), joinpath(OUTDIR, fname))
+
+    relative_diff(j) = [abs(eigenvalues_at_start[j] - qnm) / abs(qnm) for eigenvalues_at_start in sweep_eigenvalues]
+    sweep_plot = plot(start_offsets, relative_diff(1), marker = :circle, yscale = :log10,
+                      label = "r = $(sweep_r_values[1])", xlabel = "training start − t_peak (M)",
+                      ylabel = "|λ − ω_QNM| / |ω_QNM|", title = "Learned frequency vs training start")
+    plot!(sweep_plot, start_offsets, relative_diff(2), marker = :square, label = "r = $(sweep_r_values[2])")
+
+    savefig(plot(spectrum_plot, sweep_plot, layout = (1, 2), size = (1100, 450), margin = 5Plots.mm),
+            joinpath(OUTDIR, filename))
 end
 
-plot_h22("Ringdown", rd_tr, rd_pr, rd_lin, rd_quad, "ringdown_h22.png")
-plot_err("Ringdown", rd_lin, rd_quad, "ringdown_error_vs_r.png")
+plot_h22("Ringdown", ringdown_train, ringdown_predict, ringdown_linear, ringdown_quadratic, "ringdown_h22.png")
+plot_error_vs_r("Ringdown", ringdown_linear, ringdown_quadratic, "ringdown_error_vs_r.png")
 plot_qnm("ringdown_qnm.png")
-plot_h22("Inspiral", in_tr, in_pr, in_lin, in_quad, "inspiral_h22.png")
-plot_err("Inspiral", in_lin, in_quad, "inspiral_error_vs_r.png")
+plot_h22("Inspiral", inspiral_train, inspiral_predict, inspiral_linear, inspiral_quadratic, "inspiral_h22.png")
+plot_error_vs_r("Inspiral", inspiral_linear, inspiral_quadratic, "inspiral_error_vs_r.png")
 logln("\nFigures written to $OUTDIR")
-close(LOG[])
+close(LOG_FILE[])
 end

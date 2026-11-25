@@ -40,31 +40,37 @@ Semi-discrete right-hand side du/dt at interior nodes. Boundary conditions are
 Dirichlet, so du = 0 there.
 """
 function burgers_rhs!(du, u, ν, dx)
-    N = length(u)
+    n_points = length(u)
     du[1] = 0.0
-    du[N] = 0.0
-    @inbounds for i in 2:N-1
-        adv  = u[i] * (u[i+1] - u[i-1]) / (2dx)
-        diff = ν * (u[i+1] - 2u[i] + u[i-1]) / dx^2
-        du[i] = -adv + diff
+    du[n_points] = 0.0
+    @inbounds for i in 2:n_points-1
+        advection = u[i] * (u[i+1] - u[i-1]) / (2dx)
+        diffusion = ν * (u[i+1] - 2u[i] + u[i-1]) / dx^2
+        du[i] = -advection + diffusion
     end
     return du
 end
 
 # ------------------------------------------------------------------ time integration
-function rk4_step!(u, dt, f!, k1, k2, k3, k4, tmp)
-    f!(k1, u);  @. tmp = u + dt/2 * k1
-    f!(k2, tmp); @. tmp = u + dt/2 * k2
-    f!(k3, tmp); @. tmp = u + dt   * k3
-    f!(k4, tmp); @. u  += dt/6 * (k1 + 2k2 + 2k3 + k4)
+"""
+    rk4_step!(u, dt, rhs!, k1, k2, k3, k4, stage)
+
+One classical RK4 step of du/dt = rhs!(du, u), updating `u` in place. `k1`–`k4` and `stage`
+are preallocated work arrays the size of `u`, so the step does not allocate.
+"""
+function rk4_step!(u, dt, rhs!, k1, k2, k3, k4, stage)
+    rhs!(k1, u);     @. stage = u + dt/2 * k1
+    rhs!(k2, stage); @. stage = u + dt/2 * k2
+    rhs!(k3, stage); @. stage = u + dt   * k3
+    rhs!(k4, stage); @. u    += dt/6 * (k1 + 2k2 + 2k3 + k4)
     return u
 end
 
 """
-    solve_burgers(p) -> (xs, ts, U, dUdt, dt)
+    solve_burgers(p) -> (; xs, ts, U, dUdt, dt)
 
 U[:, k] is the solution at ts[k]; dUdt[:, k] is the exact semi-discrete time
-derivative there.
+derivative there; dt is the RK4 step used.
 """
 function solve_burgers(p)
     xs = collect(range(p.x_min, p.x_max, length = p.N))
@@ -75,39 +81,46 @@ function solve_burgers(p)
 
     # explicit stability: diffusion dt ≤ dx²/(2ν), advection dt ≤ dx/max|u|.
     # For Burgers with Dirichlet BCs, max|u| never exceeds its initial/boundary value.
-    umax = max(maximum(abs, u), abs(p.uL), abs(p.uR), eps())
-    dt_lim = min(dx^2 / (2p.ν), dx / umax)
+    max_speed = max(maximum(abs, u), abs(p.uL), abs(p.uR), eps())
+    dt_stable = min(dx^2 / (2p.ν), dx / max_speed)
 
-    # cell Péclet check: centered advection oscillates if umax*dx/ν > 2
-    Pe = umax * dx / p.ν
-    Pe > 2 && @warn "Cell Péclet number $(round(Pe, digits=2)) > 2: expect oscillations near steep fronts. Increase N (≳ $(ceil(Int, umax*(p.x_max-p.x_min)/(2p.ν)) + 1))."
+    # centered advection oscillates if the cell Péclet number max_speed·dx/ν exceeds 2
+    peclet = max_speed * dx / p.ν
+    if peclet > 2
+        n_needed = ceil(Int, max_speed * (p.x_max - p.x_min) / (2p.ν)) + 1
+        @warn "Cell Péclet number $(round(peclet, digits=2)) > 2: expect oscillations near steep fronts. Increase N (≳ $n_needed)."
+    end
 
-    nsave = round(Int, p.t_max / p.save_dt)
-    isapprox(nsave * p.save_dt, p.t_max; rtol = 1e-10) ||
+    n_intervals = round(Int, p.t_max / p.save_dt)
+    if !isapprox(n_intervals * p.save_dt, p.t_max; rtol = 1e-10)
         error("t_max must be a multiple of save_dt")
-    sub = ceil(Int, p.save_dt / (p.cfl * dt_lim))      # RK4 steps per snapshot
-    dt  = p.save_dt / sub
+    end
+    steps_per_snapshot = ceil(Int, p.save_dt / (p.cfl * dt_stable))
+    dt = p.save_dt / steps_per_snapshot
 
-    ts   = collect(range(0.0, p.t_max, length = nsave + 1))
-    U    = zeros(p.N, nsave + 1)
-    dUdt = zeros(p.N, nsave + 1)
-    f!(du, v) = burgers_rhs!(du, v, p.ν, dx)
-    k1, k2, k3, k4, tmp = (similar(u) for _ in 1:5)
+    ts   = collect(range(0.0, p.t_max, length = n_intervals + 1))
+    U    = zeros(p.N, n_intervals + 1)
+    dUdt = zeros(p.N, n_intervals + 1)
+    rhs!(du, v) = burgers_rhs!(du, v, p.ν, dx)
+    k1, k2, k3, k4, stage = (similar(u) for _ in 1:5)
 
     U[:, 1] .= u
-    f!(view(dUdt, :, 1), u)
-    for n in 1:nsave
-        for _ in 1:sub
-            rk4_step!(u, dt, f!, k1, k2, k3, k4, tmp)
+    rhs!(view(dUdt, :, 1), u)
+    for n in 1:n_intervals
+        for _ in 1:steps_per_snapshot
+            rk4_step!(u, dt, rhs!, k1, k2, k3, k4, stage)
         end
-        all(isfinite, u) || error("solution blew up at t = $(ts[n+1]); reduce cfl")
+        if !all(isfinite, u)
+            error("solution blew up at t = $(ts[n+1]); reduce cfl")
+        end
         U[:, n+1] .= u
-        f!(view(dUdt, :, n+1), u)
+        rhs!(view(dUdt, :, n+1), u)
     end
-    return xs, ts, U, dUdt, dt
+    return (; xs, ts, U, dUdt, dt)
 end
 
 # ------------------------------------------------------------------ outputs
+"Save the solution to `<name>_data.jld2`, plus a snapshot plot and a GIF if requested."
 function save_outputs(p, xs, ts, U, dUdt, dt)
     mkpath(p.outdir)
     datafile = joinpath(p.outdir, "$(p.name)_data.jld2")
@@ -116,24 +129,24 @@ function save_outputs(p, xs, ts, U, dUdt, dt)
     println("saved data      → ", datafile)
 
     if p.make_plot
-        idx = round.(Int, range(1, length(ts), length = 11))
-        plt = plot(xs, U[:, idx], xlabel = "x", ylabel = "u",
-                   label = permutedims(["t = $(round(ts[i], digits = 2))" for i in idx]))
+        snapshot_idx = round.(Int, range(1, length(ts), length = 11))
+        plt = plot(xs, U[:, snapshot_idx], xlabel = "x", ylabel = "u",
+                   label = permutedims(["t = $(round(ts[k], digits = 2))" for k in snapshot_idx]))
         pngfile = joinpath(p.outdir, "$(p.name)_snapshots.png")
         savefig(plt, pngfile)
         println("saved plot      → ", pngfile)
     end
 
     if p.make_gif
-        lo, hi = extrema(U)
-        pad = 0.05 * max(hi - lo, eps())
-        anim = @animate for k in eachindex(ts)
+        u_min, u_max = extrema(U)
+        padding = 0.05 * max(u_max - u_min, eps())
+        animation = @animate for k in eachindex(ts)
             plot(xs, U[:, k], xlabel = "x", ylabel = "u", legend = false,
-                 ylims = (lo - pad, hi + pad),
+                 ylims = (u_min - padding, u_max + padding),
                  title = "Burgers, ν = $(p.ν),  t = $(round(ts[k], digits = 2))")
         end
         giffile = joinpath(p.outdir, "$(p.name).gif")
-        gif(anim, giffile, fps = p.gif_fps)
+        gif(animation, giffile, fps = p.gif_fps)
     end
     return datafile
 end
@@ -144,11 +157,12 @@ end
 Solve, save data/plot/gif, and return a NamedTuple of results.
 """
 function run_burgers(p = default_params)
-    t_solve = @elapsed (xs, ts, U, dUdt, dt) = solve_burgers(p)
+    solve_seconds = @elapsed solution = solve_burgers(p)
+    (; xs, ts, U, dUdt, dt) = solution
     println("solved: N = $(p.N), ν = $(p.ν), dt = $(round(dt, sigdigits = 3)), ",
-            "$(length(ts)) snapshots in $(round(t_solve, digits = 3)) s")
+            "$(length(ts)) snapshots in $(round(solve_seconds, digits = 3)) s")
     save_outputs(p, xs, ts, U, dUdt, dt)
-    return (; xs, ts, U, dUdt, dt)
+    return solution
 end
 
 # run only when executed as a script, not when include()d
