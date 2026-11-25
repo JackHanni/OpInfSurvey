@@ -242,7 +242,7 @@ Figure: `inspiral_h22.png`.
 2. When the model form is wrong, prediction fails whatever the regression does. A linear model
    can't chirp, and the quadratic form only buys a short horizon.
 3. The same conditioning story as Burgers': one trajectory and a quadratic model give $\kappa(D)$ of
-   $10^{8}$–$10^{12}$ already at $r = 6$–$8$.
+   $10^{8}$– $10^{12}$ already at $r = 6$– $8$.
 
 ## Caveats
 
